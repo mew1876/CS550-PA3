@@ -20,8 +20,8 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
-    <ProjectGuid>{64ABDD3A-46A3-469F-8236-0ABDBCD5D6FB}</ProjectGuid>
-    <RootNamespace>GnutellaPA3</RootNamespace>
+    <ProjectGuid>{9B16E9BB-C513-4403-A222-18C1993DF5C0}</ProjectGuid>
+    <RootNamespace>Leaf</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.17134.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -120,7 +120,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Gnutella PA 3.cpp" />
+    <ClCompile Include="Leaf.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

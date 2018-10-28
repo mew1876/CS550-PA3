@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Gnutella PA 3.cpp">
+    <ClCompile Include="SuperPeer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

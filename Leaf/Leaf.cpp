@@ -121,8 +121,10 @@ int main(int argc, char* argv[]) {
 	sysClient.call("complete");
 	//Make 'updates' to random ownFiles
 	std::cout << "Starting to make random file updates" << std::endl;
-	//std::cin.get();
 	while (!canEnd) {
+		if (ownFiles.empty()) {
+			break;
+		}
 		const auto &file = std::next(std::begin(ownFiles), std::rand() % ownFiles.size());
 		file->second++;
 		if (PUSH) {
@@ -136,8 +138,6 @@ int main(int argc, char* argv[]) {
 	delete superClient;
 	//Wait for kill signal
 	ready.wait(unique, [] { return canEnd; });
-	std::cout << "got passed waiting for kill" << std::endl;
-	//std::cin.get();
 }
 
 void queryHit(int sender, std::array<int, 2> messageId, int TTL, std::string fileName, std::vector<int> leaves) {

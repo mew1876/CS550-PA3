@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
 	server.async_run(4);
 	//Create super client
 	rpc::client *superClient = new rpc::client("localhost", 8000 + superId);
-	superClient->set_timeout(50);
+	superClient->set_timeout(1000);
 	//Ping server until it responds
 	while (true) {
 		try {
@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
 			//Ping timed out, try restarting client
 			delete superClient;
 			superClient = new rpc::client("localhost", 8000 + superId);
-			superClient->set_timeout(50);
+			superClient->set_timeout(1000);
 			t; //Silence warning
 		}
 	}
@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
 		std::string fileName(argv[argIndex]);
 		std::cout << "Querying for " << fileName << std::endl;
 		std::array<int, 2> messageId = { id, nextMessageId++ };
-		std::cout << "mId: " << messageId[0] << " " << messageId[1] << std::endl;
+		//std::cout << "mId: " << messageId[0] << " " << messageId[1] << std::endl;
 		superClient->async_call("query", id, messageId, startTTL, fileName);
 		queryCount.lock();
 		pendingQueries++;

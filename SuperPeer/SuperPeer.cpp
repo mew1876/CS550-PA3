@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
 	for (int i = 4; i < argc; i++) {
 		int neighborId = std::stoi(argv[i]);
 		rpc::client *neighborClient = new rpc::client("localhost", 8000 + neighborId);
-		neighborClient->set_timeout(50);
+		neighborClient->set_timeout(1000);
 		//Ping server until it responds
 		while (true) {
 			try {
@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 				//Ping timed out, try restarting client
 				delete neighborClient;
 				neighborClient = new rpc::client("localhost", 8000 + neighborId);
-				neighborClient->set_timeout(50);
+				neighborClient->set_timeout(1000);
 				t; //Silence warning
 			}
 		}

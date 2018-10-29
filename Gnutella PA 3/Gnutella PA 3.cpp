@@ -170,7 +170,7 @@ int main(int argc, char* argv[]) {
 		}
 		run(leafPath, args);
 		rpc::client *leafClient = new rpc::client("localhost", 8000 + leafId);
-		leafClient->set_timeout(50);
+		leafClient->set_timeout(1000);
 		while (true) {
 			try {
 				leafClient->call("start");
@@ -180,7 +180,7 @@ int main(int argc, char* argv[]) {
 				//Ping timed out, try restarting client
 				delete leafClient;
 				leafClient = new rpc::client("localhost", 8000 + leafId);
-				leafClient->set_timeout(50);
+				leafClient->set_timeout(1000);
 				t; //Silence warning
 			}
 		}

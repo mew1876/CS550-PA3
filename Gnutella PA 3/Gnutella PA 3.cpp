@@ -23,8 +23,8 @@ void metrics(int valid, int invalid);
 void copyAppend(char *source, char *destination, int destSize, std::string extra);
 void run(LPCSTR name, std::string args);
 
-int nSupers = 3, leavesPerSuper = 3, filesPerLeaf = 10, requestsPerLeaf = 10, topology = ALL_TO_ALL, TTL, duplicationFactor = 2, extraLeaves = 2, extraRequests = 200;
-
+int nSupers = 5, leavesPerSuper = 3, filesPerLeaf = 20, requestsPerLeaf = 10, topology = ALL_TO_ALL, TTL, duplicationFactor = 2, extraLeaves = 1, extraRequests = 200;
+int mode = 1; //0 none, 1 push, 2 pull, 3 both
 int valid = 0, invalid = 0;
 
 int readyCount = 0, completeCount = 0;
@@ -34,7 +34,7 @@ std::condition_variable allReady;
 
 int main(int argc, char* argv[]) {
 	//Parse args to decide topology, nSupers, leavesPerSuper
-	if (argc > 8) {
+	if (argc > 9) {
 		nSupers = std::stoi(argv[1]);
 		leavesPerSuper = std::stoi(argv[2]);
 		filesPerLeaf = std::stoi(argv[3]);
@@ -43,6 +43,7 @@ int main(int argc, char* argv[]) {
 		duplicationFactor = std::stoi(argv[6]);
 		extraLeaves = std::stoi(argv[7]);
 		extraRequests = std::stoi(argv[8]);
+		mode = std::stoi(argv[9]);
 	}
 	if (topology == ALL_TO_ALL) {
 		TTL = 3;
@@ -63,12 +64,12 @@ int main(int argc, char* argv[]) {
 	char leafPath[MAX_PATH];
 	copyAppend(currentPath, superPath, MAX_PATH, "\\SuperPeer.exe");
 	copyAppend(currentPath, leafPath, MAX_PATH, "\\Leaf.exe");
-	//Spawn supers: ID, nSupers, leavesPerSuper, TTL, [neighbors...]
+	//Spawn supers: ID, nSupers, leavesPerSuper, TTL, mode, [neighbors...]
 	std::cout << "Spawning Supers" << std::endl;
 	int nextId = 1;
 	for (int i = 0; i < nSupers; i++) {
 		int id = nextId++;
-		std::string args = std::to_string(id) + " " + std::to_string(nSupers) + " " + std::to_string(leavesPerSuper) + " " + std::to_string(TTL);
+		std::string args = std::to_string(id) + " " + std::to_string(nSupers) + " " + std::to_string(leavesPerSuper) + " " + std::to_string(TTL) + " " + std::to_string(mode);
 		if (topology == ALL_TO_ALL) {
 			for (int neighborId = 1; neighborId <= nSupers; neighborId++) {
 				if (neighborId != id) {
@@ -87,7 +88,7 @@ int main(int argc, char* argv[]) {
 		run(superPath, args);
 		//std::cout << "Super args: " << args << std::endl;
 	}
-	//Spawn leaves: ID, superID, nSupers, TTL, isExtra, [initial files...], "requests", [requests...]
+	//Spawn leaves: ID, superID, nSupers, TTL, mode, isExtra, [initial files...], "requests", [requests...]
 	std::cout << "Spawning Leaves" << std::endl;
 	std::vector<std::unordered_set<int>> initialFiles;
 	std::unordered_set<int> used;
@@ -135,7 +136,7 @@ int main(int argc, char* argv[]) {
 			requestFiles.insert(requestNum);
 		}
 		//Build args and spawn leaf
-		std::string args = std::to_string(nextId++) + " " + std::to_string(i % nSupers + 1) + " " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 0";
+		std::string args = std::to_string(nextId++) + " " + std::to_string(i % nSupers + 1) + " " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 0 " + std::to_string(mode);
 		for (auto initial : initialFiles[i]) {
 			args += " " + std::to_string(initial) + ".txt";
 		}
@@ -172,7 +173,7 @@ int main(int argc, char* argv[]) {
 		std::vector<int> uniqueNumbers(nSupers * leavesPerSuper * filesPerLeaf);
 		std::iota(uniqueNumbers.begin(), uniqueNumbers.end(), 0);
 		int leafId = nextId++;
-		std::string args = std::to_string(leafId) + " 1 " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 1 requests";
+		std::string args = std::to_string(leafId) + " 1 " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 1 " + std::to_string(mode) + " requests";
 		std::random_shuffle(uniqueNumbers.begin(), uniqueNumbers.end());
 		for (int j = 0; j < std::min(extraRequests, nSupers * leavesPerSuper * filesPerLeaf); j++) {
 			args += " " + std::to_string(uniqueNumbers[j]) + ".txt";
@@ -197,11 +198,6 @@ int main(int argc, char* argv[]) {
 	}
 	allReady.wait(unique, [] { return completeCount >= nSupers * leavesPerSuper + extraLeaves; });
 	std::cout << "Extra leaves have finished" << std::endl;
-	//Calculate invalid metrics
-	metricLock.lock();
-	double percent = (double)invalid / (valid + invalid) * 100;
-	std::cout << "Valid: " << valid << "\tInvalid: " << invalid << "\tInvalid percent: " << std::setprecision(5) << percent << "%" << std::endl;
-	metricLock.unlock();
 	//Send end signal to all supers and leaves
 	std::vector<rpc::client*> clients;
 	for (int i = 1; i < nextId; i++) {
@@ -209,6 +205,12 @@ int main(int argc, char* argv[]) {
 		clients.push_back(client);
 		client->async_call("end");
 	}
+	//Calculate invalid metrics
+	metricLock.lock();
+	double percent = (double)invalid / (valid + invalid) * 100;
+	std::cout << "Valid: " << valid << "\tInvalid: " << invalid << "\tInvalid percent: " << std::setprecision(5) << percent << "%" << std::endl;
+	metricLock.unlock();
+	//Wait for end
 	std::cout << "Press Enter to exit" << std::endl;
 	std::cin.get();
 	for (auto client : clients) {

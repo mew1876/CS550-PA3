@@ -111,12 +111,7 @@ void query(int sender, std::array<int, 2> messageId, int TTL, std::string fileNa
 	printlock.lock();
 	std::cout << sender << " wants " << fileName << std::endl;
 	printlock.unlock();
-	//If we've seen the message before, skip query handling
 	std::unordered_set<int> &senders = queryHistory[messageId];
-	//for (auto file : fileIndex) {
-	//	std::cout << file.first << " ";
-	//}
-	//std::cout << std::endl;
 	if (senders.empty()) {
 		//Add new sender to history
 		senders.insert(sender);
@@ -138,7 +133,6 @@ void query(int sender, std::array<int, 2> messageId, int TTL, std::string fileNa
 		}
 		if (TTL - 1 > 0) {
 			//Forward query to neighbors
-			//std::cout << "miss" << std::endl;
 			//std::cout << "Forwarding query for " << fileName << " to neighbors: ";
 			for (auto &neighbor : neighborClients) {
 				if (neighbor.first != sender) {
@@ -183,9 +177,11 @@ void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string
 	if (invalidateHistory.find(messageId) == invalidateHistory.end()) {
 		invalidateHistory.insert(messageId);
 		invalidateLock.unlock();
+		// send invalidate to leaves
 		for (auto client : leafClients) {
 			client.second->async_call("invalidate", messageId, masterId, TTL - 1, fileName, versionNumber);
 		}
+		// send invalidate to neighbors
 		if (TTL - 1 > 0) {
 			for (auto client : neighborClients) {
 				client.second->async_call("invalidate", messageId, masterId, TTL - 1, fileName, versionNumber);

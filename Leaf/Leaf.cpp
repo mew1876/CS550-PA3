@@ -1,6 +1,7 @@
 #include "rpc/server.h"
 #include "rpc/client.h"
 #include "rpc/this_handler.h"
+#include "rpc/this_server.h"
 #include "rpc/rpc_error.h"
 #include <iostream>
 #include <string>
@@ -19,8 +20,8 @@
 #define PULL true
 
 void queryHit(int sender, std::array<int, 2> messageId, int TTL, std::string fileName, std::vector<int> leaves);
-void copyFile(int sourceId, std::string fileName);
-void invalidate(std::array<int, 2> messageId, int TTL, std::string fileName, int versionNumber);
+void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string fileName, int versionNumber);
+void downloadFile(std::vector<int> sources, std::string fileName);
 std::pair<std::vector<uint8_t>, int> obtain(std::string fileName);
 rpc::client* getClient(int clientId);
 void start();
@@ -28,28 +29,35 @@ void end();
 std::string getPath();
 
 int id, superId, nSupers, startTTL;
+bool isExtra;
 int nextMessageId = 0;
 int pendingQueries = 0;
-std::unordered_map<std::string, int> retrievedFiles;
+int valid = 0, invalid = 0;
+std::unordered_map<std::string, std::array<int, 2>> retrievedFiles;
+std::unordered_set<std::string> invalidFiles;
 std::unordered_map<std::string, int> ownFiles;
 std::unordered_map<int, rpc::client*> leafClients;
+rpc::client *superClient;
 
 bool canStart = false, canEnd = false;
 std::mutex waitLock;
 std::mutex queryCount;
 std::mutex clientsLock;
 std::mutex versionLock;
+std::mutex metricLock;
+std::mutex printlock;
 std::condition_variable ready;
 
 int main(int argc, char* argv[]) {
 	//Parse args for ID, files to start with, files to request
-	if (argc < 4) {
+	if (argc < 5) {
 		return -1;
 	}
 	id = std::stoi(argv[0]);
 	superId = std::stoi(argv[1]);
 	nSupers = std::stoi(argv[2]);
 	startTTL = std::stoi(argv[3]);
+	isExtra = std::stoi(argv[4]);
 	std::cout << "Im a leaf with ID " << id << " and my super's ID is " << superId << std::endl;
 	//Start server for start, obtain, and end signals
 	rpc::server server(8000 + id);
@@ -58,9 +66,12 @@ int main(int argc, char* argv[]) {
 	server.bind("obtain", &obtain);
 	server.bind("invalidate", &invalidate);
 	server.bind("end", &end);
+	server.bind("stop_server", []() {
+		rpc::this_server().stop();
+	});
 	server.async_run(4);
 	//Create super client
-	rpc::client *superClient = new rpc::client("localhost", 8000 + superId);
+	superClient = new rpc::client("localhost", 8000 + superId);
 	superClient->set_timeout(1000);
 	//Ping server until it responds
 	while (true) {
@@ -83,7 +94,7 @@ int main(int argc, char* argv[]) {
 	CreateDirectory("Leaves", NULL);
 	CreateDirectory(getPath().c_str(), NULL);
 	int argIndex;
-	for (argIndex = 4; argIndex < argc; argIndex++) {
+	for (argIndex = 5; argIndex < argc; argIndex++) {
 		if (strcmp(argv[argIndex], std::string("requests").c_str()) == 0) {
 			argIndex++;
 			break;
@@ -107,7 +118,9 @@ int main(int argc, char* argv[]) {
 	//Make file requests
 	for (; argIndex < argc; argIndex++) {
 		std::string fileName(argv[argIndex]);
+		printlock.lock();
 		std::cout << "Querying for " << fileName << std::endl;
+		printlock.unlock();
 		std::array<int, 2> messageId = { id, nextMessageId++ };
 		//std::cout << "mId: " << messageId[0] << " " << messageId[1] << std::endl;
 		superClient->async_call("query", id, messageId, startTTL, fileName);
@@ -118,79 +131,149 @@ int main(int argc, char* argv[]) {
 	ready.wait(unique, [] { return pendingQueries == 0; });
 	//Send complete signal to system
 	rpc::client sysClient("localhost", 8000);
+	//Report metrics
+	if (isExtra) {
+		sysClient.call("metrics", valid, invalid);
+	}
 	sysClient.call("complete");
 	//Make 'updates' to random ownFiles
+	std::srand(unsigned int(std::time(nullptr) + id));
 	std::cout << "Starting to make random file updates" << std::endl;
 	while (!canEnd) {
 		if (ownFiles.empty()) {
 			break;
 		}
 		const auto &file = std::next(std::begin(ownFiles), std::rand() % ownFiles.size());
+		if (file == ownFiles.end()) {
+			break;
+		}
 		file->second++;
 		if (PUSH) {
 			//send push message to super
+			printlock.lock();
 			std::cout << "Pushing invalidate for version " << file->second << " of " << file->first << std::endl;
+			printlock.unlock();
 			std::array<int, 2> messageId = { id, nextMessageId++ };
-			superClient->async_call("invalidate", messageId, startTTL, file->first, file->second);
+			superClient->async_call("invalidate", messageId, id, startTTL, file->first, file->second);
 		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+		std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 1000));
 	}
 	delete superClient;
 	//Wait for kill signal
-	ready.wait(unique, [] { return canEnd; });
+	ready.wait(unique, [] { return canEnd && false; });
+	//Wait for own server to end gracefully
+	rpc::client selfClient("localhost", 8000 + id);
+	selfClient.call("stop_server");
+	if (isExtra) {
+		std::cin.get();
+	}
 }
 
 void queryHit(int sender, std::array<int, 2> messageId, int TTL, std::string fileName, std::vector<int> leaves) {
-	//Pick random leaf from list of holders
-	int sourceId = leaves[std::rand() % leaves.size()];
-	std::cout << "Sending file request to " << sourceId << " for " << fileName << std::endl;
-	//Copy file from chosen source
-	std::thread(copyFile, sourceId, fileName).detach();
+	printlock.lock();
+	std::cout << "queryhit for " << fileName << " from " << sender << std::endl;
+	printlock.unlock();
+	//Try to copy file from each source in another thread until success
+	std::thread(downloadFile, leaves, fileName).detach();
 }
 
-void copyFile(int sourceId, std::string fileName) {
-	//TODO take leaves as arg so we can try another source on failure
-	try {
-		//Skip copy if the file has already been retrieved
-		versionLock.lock();
-		if (retrievedFiles.find(fileName) == retrievedFiles.end()) {
-			std::pair<std::vector<uint8_t>, int> response = getClient(sourceId)->call("obtain", fileName).as<std::pair<std::vector<uint8_t>, int>>();
-			std::vector<uint8_t> bytes = response.first;
-			int versionNumber = response.second;
-			retrievedFiles.insert({ fileName, versionNumber });
-			versionLock.unlock();
-			std::ofstream destination(getPath() + fileName, std::ios::binary);
-			destination.write((char *)bytes.data(), bytes.size());
-			std::cout << "Downloaded " << fileName << " from " << sourceId << std::endl;
-			queryCount.lock();
-			pendingQueries--;
-			std::cout << "Pending: " << pendingQueries << std::endl;
-			//TODO: find out why sometimes the last few leaves get stuck waiting for requests from each other
-			queryCount.unlock();
-			ready.notify_one();
-		}
-		else {
-			versionLock.unlock();
-		}
-	}
-	catch (...) {
-		//TODO: catch file opening errors differently from obtain errors
-		versionLock.unlock();
-	}
-}
-
-void invalidate(std::array<int, 2> messageId, int TTL, std::string fileName, int versionNumber) {
+void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string fileName, int versionNumber) {
 	versionLock.lock();
-	auto fileIter = retrievedFiles.find(fileName);
-	if (fileIter != retrievedFiles.end() && fileIter->second < versionNumber) {
+	const auto &fileIter = retrievedFiles.find(fileName);
+	if (fileIter != retrievedFiles.end() && fileIter->second[0] < versionNumber) {
+		printlock.lock();
 		std::cout << "Re-Downloading " << fileName << " version " << versionNumber << std::endl;
+		//Update version number preemptively to block repeat invalidations
+		fileIter->second[0] = versionNumber;
+		//Mark file as invalid
+		invalidFiles.insert(fileName);
+		std::cout << "invalidated " << fileName << std::endl;
+		printlock.unlock();
+		//Download file from master
+		std::vector<int> sourceIds = { masterId };
+		std::thread(downloadFile, sourceIds, fileName).detach();
 	}
 	versionLock.unlock();
 }
 
+void downloadFile(std::vector<int> sources, std::string fileName) {
+	for (unsigned int i = 0; i < sources.size(); i++) {
+		try {
+			printlock.lock();
+			std::cout << "Sending file request to " << sources[i] << " for " << fileName << std::endl;
+			printlock.unlock();
+			//Download file
+			std::pair<std::vector<uint8_t>, int> response = getClient(sources[i])->call("obtain", fileName).as<std::pair<std::vector<uint8_t>, int>>();
+			std::vector<uint8_t> bytes = response.first;
+			int versionNumber = response.second;
+			versionLock.lock();
+			bool isValid = false;
+			bool fresh = false;
+			if (invalidFiles.find(fileName) == invalidFiles.end()) {
+				isValid = true;
+			}
+			if (retrievedFiles.find(fileName) == retrievedFiles.end()) {
+				fresh = true;
+			}
+			printlock.lock();
+			std::cout << "Read " << fileName << " from " << sources[i] << std::endl;
+			printlock.unlock();
+			if (fresh || !isValid) {
+				//Copy downloaded file
+				std::ofstream destination(getPath() + fileName, std::ios::binary);
+				destination.write((char *)bytes.data(), bytes.size());
+				printlock.lock();
+				std::cout << "Wrote " << fileName << " from " << sources[i] << std::endl;
+				printlock.unlock();
+				if (fresh) {
+					//Add file to file records
+					retrievedFiles.insert({ fileName, std::array<int, 2>({ versionNumber, sources[i] }) });
+					superClient->call("add", id, fileName);
+					//Decrement pending query count
+					queryCount.lock();
+					pendingQueries--;
+					queryCount.unlock();
+					ready.notify_one();
+				}
+				if (!isValid) {
+					//Revalidate file locally
+					invalidFiles.erase(fileName);
+					printlock.lock();
+					std::cout << "revalidated " << fileName << std::endl;
+					printlock.unlock();
+				}
+			}
+			versionLock.unlock();
+			printlock.lock();
+			std::cout << "Pending: " << pendingQueries << std::endl;
+			printlock.unlock();
+			metricLock.lock();
+			valid++;
+			metricLock.unlock();
+			break;
+		}
+		catch (rpc::rpc_error &e) {
+			printlock.lock();
+			std::cout << "Error downloading " << fileName << " from " << sources[i] << ": " << e.what() << std::endl;
+			printlock.unlock();
+			metricLock.lock();
+			invalid++;
+			metricLock.unlock();
+		}
+		catch (...) {
+			std::cout << "something else broke" << std::endl;
+			std::cin.get();
+		}
+	}
+}
+
 std::pair<std::vector<uint8_t>, int> obtain(std::string fileName) {
 	//TODO: If pull consistency enabled, check version against owner and error is out-of-date
-	std::cout << "Obtain request for " << fileName << std::endl;
+	//std::cout << "Obtain request for " << fileName << std::endl;
+	if (invalidFiles.find(fileName) != invalidFiles.end()) {
+		rpc::this_handler().respond_error("File out of date");
+		return {};
+	}
 	//Returns specified file as a vector of bytes
 	try {
 		std::ifstream file(getPath() + fileName, std::ios::binary);
@@ -206,19 +289,21 @@ std::pair<std::vector<uint8_t>, int> obtain(std::string fileName) {
 			std::istream_iterator<uint8_t>(file),
 			std::istream_iterator<uint8_t>());
 		//Get version number to return
+		versionLock.lock();
 		int version = -1;
-		auto versionIter = ownFiles.find(fileName);
-		if (versionIter != ownFiles.end()) {
+		auto ownIter = ownFiles.find(fileName);
+		if (ownIter != ownFiles.end()) {
 			//We are the original owner of the file
-			version = versionIter->second;
+			version = ownIter->second;
 		}
 		else {
-			versionIter = retrievedFiles.find(fileName);
-			if (versionIter != retrievedFiles.end()) {
+			auto retrievedIter = retrievedFiles.find(fileName);
+			if (retrievedIter != retrievedFiles.end()) {
 				//We're holding the file, but aren't the owner
-				version = versionIter->second;
+				version = retrievedIter->second[0];
 			}
 		}
+		versionLock.unlock();
 		return std::pair<std::vector<uint8_t>, int>(bytes, version);
 	}
 	catch (...) {

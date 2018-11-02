@@ -19,18 +19,22 @@
 
 void superReady();
 void leafComplete();
+void metrics(int valid, int invalid);
 void copyAppend(char *source, char *destination, int destSize, std::string extra);
 void run(LPCSTR name, std::string args);
 
-int nSupers = 3, leavesPerSuper = 3, filesPerLeaf = 10, requestsPerLeaf = 10, topology = ALL_TO_ALL, TTL, duplicationFactor = 2, extraLeaves = 1;
+int nSupers = 3, leavesPerSuper = 3, filesPerLeaf = 10, requestsPerLeaf = 10, topology = ALL_TO_ALL, TTL, duplicationFactor = 2, extraLeaves = 2, extraRequests = 200;
+
+int valid = 0, invalid = 0;
 
 int readyCount = 0, completeCount = 0;
 std::mutex countLock;
+std::mutex metricLock;
 std::condition_variable allReady;
 
 int main(int argc, char* argv[]) {
 	//Parse args to decide topology, nSupers, leavesPerSuper
-	if (argc > 7) {
+	if (argc > 8) {
 		nSupers = std::stoi(argv[1]);
 		leavesPerSuper = std::stoi(argv[2]);
 		filesPerLeaf = std::stoi(argv[3]);
@@ -38,6 +42,7 @@ int main(int argc, char* argv[]) {
 		topology = std::stoi(argv[5]);
 		duplicationFactor = std::stoi(argv[6]);
 		extraLeaves = std::stoi(argv[7]);
+		extraRequests = std::stoi(argv[8]);
 	}
 	if (topology == ALL_TO_ALL) {
 		TTL = 3;
@@ -49,6 +54,7 @@ int main(int argc, char* argv[]) {
 	rpc::server server(8000);
 	server.bind("ready", &superReady);
 	server.bind("complete", &leafComplete);
+	server.bind("metrics", &metrics);
 	server.async_run(1);
 	//Get path to super and leaf executables
 	char currentPath[MAX_PATH];
@@ -81,7 +87,7 @@ int main(int argc, char* argv[]) {
 		run(superPath, args);
 		//std::cout << "Super args: " << args << std::endl;
 	}
-	//Spawn leaves: ID, superID, nSupers, TTL, [initial files...], "requests", [requests...]
+	//Spawn leaves: ID, superID, nSupers, TTL, isExtra, [initial files...], "requests", [requests...]
 	std::cout << "Spawning Leaves" << std::endl;
 	std::vector<std::unordered_set<int>> initialFiles;
 	std::unordered_set<int> used;
@@ -129,7 +135,7 @@ int main(int argc, char* argv[]) {
 			requestFiles.insert(requestNum);
 		}
 		//Build args and spawn leaf
-		std::string args = std::to_string(nextId++) + " " + std::to_string(i % nSupers + 1) + " " + std::to_string(nSupers) + " " + std::to_string(TTL);
+		std::string args = std::to_string(nextId++) + " " + std::to_string(i % nSupers + 1) + " " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 0";
 		for (auto initial : initialFiles[i]) {
 			args += " " + std::to_string(initial) + ".txt";
 		}
@@ -158,14 +164,17 @@ int main(int argc, char* argv[]) {
 	//End timer
 	std::chrono::duration<double> duration = std::chrono::high_resolution_clock::now() - startTime;
 	std::cout << totalRequests << " requests took " << duration.count() << " seconds. R/s = " << std::to_string(totalRequests / duration.count()) << std::endl;
+	//Wait a little bit so some files get updated
+	std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 	//Create extra leaves that will run while others are doing file modifications
+	std::cout << "Spawning extra leaves" << std::endl;
 	for (int i = 0; i < extraLeaves; i++) {
-		std::vector<int> uniqueNumbers(nSupers * leavesPerSuper * filesPerLeaf / duplicationFactor);
-		std::iota(uniqueNumbers.begin(), uniqueNumbers.end(), 1);
+		std::vector<int> uniqueNumbers(nSupers * leavesPerSuper * filesPerLeaf);
+		std::iota(uniqueNumbers.begin(), uniqueNumbers.end(), 0);
 		int leafId = nextId++;
-		std::string args = std::to_string(leafId) + " 1 " + std::to_string(nSupers) + " " + std::to_string(TTL) + " requests";
+		std::string args = std::to_string(leafId) + " 1 " + std::to_string(nSupers) + " " + std::to_string(TTL) + " 1 requests";
 		std::random_shuffle(uniqueNumbers.begin(), uniqueNumbers.end());
-		for (int j = 0; j < requestsPerLeaf; j++) {
+		for (int j = 0; j < std::min(extraRequests, nSupers * leavesPerSuper * filesPerLeaf); j++) {
 			args += " " + std::to_string(uniqueNumbers[j]) + ".txt";
 		}
 		run(leafPath, args);
@@ -187,6 +196,12 @@ int main(int argc, char* argv[]) {
 		delete leafClient;
 	}
 	allReady.wait(unique, [] { return completeCount >= nSupers * leavesPerSuper + extraLeaves; });
+	std::cout << "Extra leaves have finished" << std::endl;
+	//Calculate invalid metrics
+	metricLock.lock();
+	double percent = (double)invalid / (valid + invalid) * 100;
+	std::cout << "Valid: " << valid << "\tInvalid: " << invalid << "\tInvalid percent: " << std::setprecision(5) << percent << "%" << std::endl;
+	metricLock.unlock();
 	//Send end signal to all supers and leaves
 	std::vector<rpc::client*> clients;
 	for (int i = 1; i < nextId; i++) {
@@ -215,6 +230,13 @@ void leafComplete() {
 	allReady.notify_one();
 }
 
+void metrics(int validIn, int invalidIn) {
+	metricLock.lock();
+	valid += validIn;
+	invalid += invalidIn;
+	metricLock.unlock();
+}
+
 void copyAppend(char *source, char *destination, int destSize, std::string extra) {
 	strcpy_s(destination, destSize, source);
 	strcat_s(destination, destSize, extra.c_str());
@@ -226,7 +248,7 @@ void run(LPCSTR name, std::string args) {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
-	const int MAX_ARG = 512;
+	const int MAX_ARG = 2048;
 	char cArg[MAX_ARG];
 	strcpy_s(cArg, MAX_ARG, args.c_str());
 

@@ -17,18 +17,22 @@
 void query(int sender, std::array<int, 2> messageId, int TTL, std::string fileName);
 void queryHit(int sender, std::array<int, 2> messageId, int TTL, std::string fileName, std::vector<int> leaves);
 void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string fileName, int versionNumber);
-void add(int leafId, std::string fileName);
+void add(int leafId, std::string fileName, int version);
 rpc::client* getClient(int id);
 void leafReady();
 void end();
 void ping();
 void dumpIndex();
+void updateVersion(int leafId, std::string fileName, int version);
+void checkVersion(int sender, std::string fileName, int version);
 
 int id, nSupers, nChildren, startTTL;
 std::unordered_map<int, rpc::client*> neighborClients;
 std::unordered_map<int, rpc::client*> leafClients;
 
 std::unordered_map<std::string, std::vector<int>> fileIndex;
+std::unordered_map<std::string, std::unordered_map<int, std::pair<int,bool>>> fileVersionIndex; // fileName -> {leafID -> (version,isValid)}
+//std::unordered_map<std::string, std::vector<int>> invalidFiles;
 std::map<std::array<int, 2>, std::unordered_set<int>> queryHistory;
 std::set<std::array<int, 2>> invalidateHistory;
 
@@ -59,6 +63,9 @@ int main(int argc, char* argv[]) {
 	server.bind("ping", &ping);
 	server.bind("invalidate", &invalidate);
 	server.bind("end", &end);
+	server.bind("updateVersion", &updateVersion);
+	server.bind("fileOutOfDate", &fileOutOfDate);
+	server.bind("checkVersion", &checkVersion);
 	server.bind("stop_server", []() {
 		rpc::this_server().stop();
 	});
@@ -193,10 +200,13 @@ void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string
 	}
 }
 
-void add(int leafId, std::string fileName) {
+void add(int leafId, std::string fileName, int version) {
 	indexLock.lock();
 	std::cout << "File registered: " << leafId << " has " << fileName << std::endl;
 	std::vector<int> &leaves = fileIndex[fileName];
+
+	fileVersionIndex[fileName][leafId].first = version;
+	fileVersionIndex[fileName][leafId].second = true;
 	if (std::find(leaves.begin(), leaves.end(), leafId) == leaves.end()) {
 		leaves.push_back(leafId);
 	}
@@ -246,5 +256,49 @@ void dumpIndex() {
 			std::cout << IdIter << " ";
 		}
 		std::cout << std::endl;
+	}
+}
+
+void updateVersion(int leafId, std::string fileName, int version) {
+	indexLock.lock();
+	const auto mapEntry = fileVersionIndex.find(fileName); // iterator, {leafId -> (version,isValid)}
+	if (mapEntry != fileVersionIndex.end()) {
+		// found fileName in fileVersionIndex
+		const auto pairEntry = (mapEntry->second).find(leafId);
+		if (pairEntry != (mapEntry->second).end()) {
+			// found leafID, update the version and validity
+			auto &fileVersion = (pairEntry->second).first;
+			fileVersion = version;
+			auto &isFileValid = (pairEntry->second).second;
+			isFileValid = true;
+		}
+	}
+	indexLock.unlock();
+}
+
+void checkVersion(int sender, std::string fileName, int version) {
+	indexLock.lock();
+	int newestVersion = -1;
+	const auto mapEntry = fileVersionIndex.find(fileName); // iterator, {leafId -> (version,isValid)}
+	if (mapEntry != fileVersionIndex.end()) {
+		// found fileName in fileVersionIndex
+		int newestVersion = -1;
+		for (auto const &pairEntry : (mapEntry->second)) {
+			auto &fileVersion = (pairEntry.second).first;
+			if (fileVersion > newestVersion) {
+				newestVersion = fileVersion;
+			}
+		}
+		if (newestVersion > version) {
+			getClient(sender)->async_call("fileOutOfDate", fileName);
+		}
+	}
+	indexLock.unlock();
+}
+
+void fileOutOfDate(std::string fileName) {
+	const auto &indexEntry = fileIndex.find(fileName);
+	for (auto const &leafNodeID : (indexEntry->second)) {
+		getClient(leafNodeID)->async_call("invalidate", fileName);
 	}
 }

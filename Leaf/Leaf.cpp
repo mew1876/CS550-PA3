@@ -16,8 +16,9 @@
 #include <chrono>
 #include <thread>
 
-#define PUSH true
-#define PULL true
+#define PUSH false
+#define PULL false
+#define PULL2 true
 
 void queryHit(int sender, std::array<int, 2> messageId, int TTL, std::string fileName, std::vector<int> leaves);
 void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string fileName, int versionNumber);
@@ -108,7 +109,7 @@ int main(int argc, char* argv[]) {
 		}
 		file.close();
 		ownFiles.insert({ fileName, 0 });
-		superClient->call("add", id, fileName);
+		superClient->call("add", id, fileName, 0);
 	}
 	//Send ready signal to super
 	superClient->call("ready");
@@ -147,7 +148,7 @@ int main(int argc, char* argv[]) {
 		if (file == ownFiles.end()) {
 			break;
 		}
-		file->second++;
+		file->second++; // increment version number
 		if (PUSH) {
 			//send push message to super
 			printlock.lock();
@@ -155,6 +156,10 @@ int main(int argc, char* argv[]) {
 			printlock.unlock();
 			std::array<int, 2> messageId = { id, nextMessageId++ };
 			superClient->async_call("invalidate", messageId, id, startTTL, file->first, file->second);
+		}
+		if (PULL2) {
+			//send updateVersion message to super
+			superClient->async_call("updateVersion", id, file->first, file->second);
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 1000));
 	}
@@ -194,6 +199,7 @@ void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string
 		std::thread(downloadFile, sourceIds, fileName).detach();
 	}
 	versionLock.unlock();
+	superClient->async_call("updateVersion", id, fileName, versionNumber);
 }
 
 void downloadFile(std::vector<int> sources, std::string fileName) {
@@ -228,7 +234,7 @@ void downloadFile(std::vector<int> sources, std::string fileName) {
 				if (fresh) {
 					//Add file to file records
 					retrievedFiles.insert({ fileName, std::array<int, 2>({ versionNumber, sources[i] }) });
-					superClient->call("add", id, fileName);
+					superClient->call("add", id, fileName, versionNumber);
 					//Decrement pending query count
 					queryCount.lock();
 					pendingQueries--;

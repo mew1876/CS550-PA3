@@ -28,7 +28,7 @@ void checkVersion(int sender, std::string fileName, int version);
 void fileOutOfDate(std::string fileName);
 
 int id, nSupers, nChildren, startTTL;
-bool push = false, pull = false;
+bool push = false, pull1 = false, pull2 = false;
 std::unordered_map<int, rpc::client*> neighborClients;
 std::unordered_map<int, rpc::client*> leafClients;
 
@@ -61,7 +61,10 @@ int main(int argc, char* argv[]) {
 		push = true;
 	}
 	if (mode == 2 || mode == 3) {
-		pull = true;
+		pull1 = true;
+	}
+	if (mode == 4) {
+		pull2 = true;
 	}
 	//Start server for file registrations, pings, ready signals, queries, queryhits, and end signal
 	rpc::server server(8000 + id);
@@ -109,8 +112,25 @@ int main(int argc, char* argv[]) {
 	//Send ready signal to system
 	rpc::client sysClient("localhost", 8000);
 	sysClient.call("ready");
+	if (pull2) {
+		while (!canEnd) {
+			for (auto mapIter : fileVersionIndex) {
+				std::string fileName = mapIter.first;
+				auto fileMap = mapIter.second;
+				for (auto fileMapIter : fileMap) {
+					int leafId = fileMapIter.first;
+					int version = fileMapIter.second.second;
+					for (auto client : neighborClients) {
+						client.second->async_call("checkVersion", id, fileName, version);
+					}
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+		}
+	}
 	//Wait for end signal
 	ready.wait(unique, [] { return canEnd && false; });
+
 	//std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 	//Wait for own server to end gracefully
 	rpc::client selfClient("localhost", 8000 + id);

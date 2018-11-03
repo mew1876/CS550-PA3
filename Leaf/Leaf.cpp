@@ -30,7 +30,7 @@ std::string getPath();
 
 int id, superId, nSupers, startTTL;
 bool isExtra;
-bool push = false, pull = false;
+bool push = false, pull1 = false, pull2 = false;
 int nextMessageId = 0;
 int pendingQueries = 0;
 int valid = 0, invalid = 0;
@@ -65,7 +65,10 @@ int main(int argc, char* argv[]) {
 		push = true;
 	}
 	if (mode == 2 || mode == 3) {
-		pull = true;
+		pull1 = true;
+	}
+	if (mode == 4) {
+		pull2 = true;
 	}
 	std::cout << "Im a leaf with ID " << id << " and my super's ID is " << superId << std::endl;
 	//Start server for start, obtain, and end signals
@@ -283,7 +286,7 @@ void obtain(int sender, std::string fileName) {
 			printlock.lock();
 			std::cout << "Checking version of " << fileName << std::endl;
 			printlock.unlock();
-			if (!pull || getClient(retrievedIter->second[1])->call("upToDate", fileName, retrievedIter->second[0]).as<bool>()) {
+			if (!pull1 || getClient(retrievedIter->second[1])->call("upToDate", fileName, retrievedIter->second[0]).as<bool>()) {
 				printlock.lock();
 				std::cout << "File up to date" << std::endl;
 				printlock.unlock();

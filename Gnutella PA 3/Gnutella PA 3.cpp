@@ -24,7 +24,7 @@ void copyAppend(char *source, char *destination, int destSize, std::string extra
 void run(LPCSTR name, std::string args);
 
 int nSupers = 5, leavesPerSuper = 3, filesPerLeaf = 20, requestsPerLeaf = 10, topology = ALL_TO_ALL, TTL, duplicationFactor = 2, extraLeaves = 1, extraRequests = 200;
-int mode = 1; //0 none, 1 push, 2 pull, 3 both
+int mode = 4; //0 none, 1 push, 2 pull1, 3 push&pull1, 4 pull2
 int valid = 0, invalid = 0;
 
 int readyCount = 0, completeCount = 0;

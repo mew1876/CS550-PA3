@@ -25,7 +25,7 @@ void ping();
 void dumpIndex();
 void updateVersion(int leafId, std::string fileName, int version);
 void checkVersion(int sender, std::string fileName, int version);
-void fileOutOfDate(std::string fileName);
+void fileOutOfDate(std::string fileName, int versionNumber);
 
 int id, nSupers, nChildren, startTTL;
 bool push = false, pull1 = false, pull2 = false;
@@ -44,6 +44,7 @@ std::mutex countLock;
 std::mutex historyLock;
 std::mutex invalidateLock;
 std::mutex indexLock;
+std::mutex waitLock;
 std::mutex printlock;
 std::condition_variable ready;
 
@@ -106,7 +107,7 @@ int main(int argc, char* argv[]) {
 		neighborClients.insert({ neighborId, neighborClient });
 	}
 	//Wait for all children to give ready signal
-	std::unique_lock<std::mutex> unique(countLock);
+	std::unique_lock<std::mutex> unique(waitLock);
 	ready.wait(unique, [] { return readyCount >= nChildren; });
 	std::cout << "----- Children Ready -----" << std::endl;
 	//Send ready signal to system
@@ -114,6 +115,7 @@ int main(int argc, char* argv[]) {
 	sysClient.call("ready");
 	if (pull2) {
 		while (!canEnd) {
+			std::cout << "Checking versions" << std::endl;
 			for (auto mapIter : fileVersionIndex) {
 				std::string fileName = mapIter.first;
 				auto fileMap = mapIter.second;
@@ -125,7 +127,7 @@ int main(int argc, char* argv[]) {
 					}
 				}
 			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 		}
 	}
 	//Wait for end signal
@@ -309,6 +311,7 @@ void updateVersion(int leafId, std::string fileName, int version) {
 }
 
 void checkVersion(int sender, std::string fileName, int version) {
+	//std::cout << "CHECK VERSION" << std::endl;
 	indexLock.lock();
 	int newestVersion = -1;
 	const auto mapEntry = fileVersionIndex.find(fileName); // iterator, {leafId -> (version,isValid)}
@@ -322,15 +325,16 @@ void checkVersion(int sender, std::string fileName, int version) {
 			}
 		}
 		if (newestVersion > version) {
-			getClient(sender)->async_call("fileOutOfDate", fileName);
+			getClient(sender)->async_call("fileOutOfDate", fileName, newestVersion);
 		}
 	}
 	indexLock.unlock();
 }
 
-void fileOutOfDate(std::string fileName) {
+void fileOutOfDate(std::string fileName, int versionNumber) {
+	//std::cout << "FILE OUT OF DATE!" << std::endl;
 	const auto &indexEntry = fileIndex.find(fileName);
 	for (auto const &leafNodeID : (indexEntry->second)) {
-		getClient(leafNodeID)->async_call("invalidate", fileName);
+		getClient(leafNodeID)->async_call("invalidate", std::array<int, 2>({ 0, 0 }), -1, startTTL, fileName, versionNumber);
 	}
 }

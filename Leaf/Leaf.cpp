@@ -124,11 +124,13 @@ int main(int argc, char* argv[]) {
 		ownFiles.insert({ fileName, 0 });
 		superClient->call("add", id, fileName, 0);
 	}
+	std::cout << "Call super" << std::endl;
 	//Send ready signal to super
 	superClient->call("ready");
 	//Wait for start signal
 	std::unique_lock<std::mutex> unique(waitLock);
 	ready.wait(unique, [] { return canStart; });
+	std::cout << "Ready to rumble" << std::endl;
 	//Make file requests
 	for (; argIndex < argc; argIndex++) {
 		std::string fileName(argv[argIndex]);
@@ -158,6 +160,9 @@ int main(int argc, char* argv[]) {
 			break;
 		}
 		file->second++;
+		if (pull2) {
+			superClient->async_call("updateVersion", id, file->first, file->second);
+		}
 		if (push) {
 			//send push message to super
 			printlock.lock();
@@ -226,12 +231,14 @@ void invalidate(std::array<int, 2> messageId, int masterId, int TTL, std::string
 		std::cout << "invalidated " << fileName << std::endl;
 		printlock.unlock();
 		//Download file from master
+		if (masterId == -1) {
+			masterId = fileIter->second[1];
+		}
 		std::vector<int> sourceIds = { masterId };
 		std::thread dlThread = std::thread(downloadFile, sourceIds, fileName);
 		downloadThreads.push_back(std::move(dlThread));
 	}
 	versionLock.unlock();
-	superClient->async_call("updateVersion", id, fileName, versionNumber);
 }
 
 void downloadFile(std::vector<int> sources, std::string fileName) {

@@ -359,7 +359,7 @@ void receive(std::string fileName, std::vector<uint8_t> bytes, int version, int 
 		if (fresh) {
 			//Add file to file records
 			retrievedFiles.insert({ fileName, std::array<int, 2>({ version, masterId }) });
-			superClient->call("add", id, fileName);
+			superClient->call("add", id, fileName, version);
 			//Decrement pending query count
 			queryCount.lock();
 			pendingQueries--;

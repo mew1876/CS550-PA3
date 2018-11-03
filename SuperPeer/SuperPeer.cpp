@@ -25,6 +25,7 @@ void ping();
 void dumpIndex();
 void updateVersion(int leafId, std::string fileName, int version);
 void checkVersion(int sender, std::string fileName, int version);
+void fileOutOfDate(std::string fileName);
 
 int id, nSupers, nChildren, startTTL;
 bool push = false, pull = false;

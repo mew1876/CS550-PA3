@@ -27,6 +27,7 @@ void updateVersion(int leafId, std::string fileName, int version);
 void checkVersion(int sender, std::string fileName, int version);
 
 int id, nSupers, nChildren, startTTL;
+bool push = false, pull = false;
 std::unordered_map<int, rpc::client*> neighborClients;
 std::unordered_map<int, rpc::client*> leafClients;
 
@@ -47,13 +48,20 @@ std::condition_variable ready;
 
 int main(int argc, char* argv[]) {
 	//Parse args for ID, nChildren, neighbors
-	if (argc < 3) {
+	if (argc < 4) {
 		return -1;
 	}
 	id = std::stoi(argv[0]);
 	nSupers = std::stoi(argv[1]);
 	nChildren = std::stoi(argv[2]);
 	startTTL = std::stoi(argv[3]);
+	int mode = std::stoi(argv[4]);
+	if (mode == 1 || mode == 3) {
+		push = true;
+	}
+	if (mode == 2 || mode == 3) {
+		pull = true;
+	}
 	//Start server for file registrations, pings, ready signals, queries, queryhits, and end signal
 	rpc::server server(8000 + id);
 	server.bind("ready", &leafReady);
@@ -72,7 +80,7 @@ int main(int argc, char* argv[]) {
 	server.async_run(4);
 	std::cout << "Im a super with ID " << id << std::endl;
 	//Create clients for neighbors once they're online
-	for (int i = 4; i < argc; i++) {
+	for (int i = 5; i < argc; i++) {
 		int neighborId = std::stoi(argv[i]);
 		rpc::client *neighborClient = new rpc::client("localhost", 8000 + neighborId);
 		neighborClient->set_timeout(1000);
@@ -102,15 +110,18 @@ int main(int argc, char* argv[]) {
 	sysClient.call("ready");
 	//Wait for end signal
 	ready.wait(unique, [] { return canEnd && false; });
+	//std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+	//Wait for own server to end gracefully
+	rpc::client selfClient("localhost", 8000 + id);
+	selfClient.call("stop_server");
+	//Free clients
 	for (auto client : neighborClients) {
 		delete client.second;
 	}
 	for (auto client : leafClients) {
 		delete client.second;
 	}
-	//Wait for own server to end gracefully
-	rpc::client selfClient("localhost", 8000 + id);
-	selfClient.call("stop_server");
+	std::cout << "dead" << std::endl;
 }
 
 void query(int sender, std::array<int, 2> messageId, int TTL, std::string fileName) {
